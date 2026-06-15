@@ -1,8 +1,0 @@
-{
-  "permissions": {
-    "allow": [
-      "Bash(bash -n deploy/gcp-deploy.sh)",
-      "Bash(chmod +x deploy/gcp-deploy.sh)"
-    ]
-  }
-}
