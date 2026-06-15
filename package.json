@@ -1,0 +1,13 @@
+{
+  "name": "tic-tac-toe",
+  "private": true,
+  "scripts": {
+    "build:server": "npm ci --prefix server && npm run build --prefix server",
+    "build:client": "npm ci --prefix client && npm run build --prefix client",
+    "build": "npm run build:server && npm run build:client",
+    "dev:client": "npm run dev --prefix client",
+    "docker:up": "docker compose up -d --build",
+    "docker:down": "docker compose down",
+    "docker:logs": "docker compose logs -f nakama"
+  }
+}

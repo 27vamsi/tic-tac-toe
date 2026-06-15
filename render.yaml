@@ -1,0 +1,82 @@
+# Render Blueprint — https://render.com/docs/blueprint-spec
+# Deploy: connect repo in Render Dashboard → New → Blueprint → select render.yaml
+#
+# Nakama needs a paid Web Service plan for reliable WebSockets (free tier spins down).
+
+databases:
+  - name: tic-tac-toe-db
+    plan: free
+    databaseName: tic_tac_toe
+    user: tic_tac_toe
+
+services:
+  - type: web
+    name: tic-tac-toe-nakama
+    runtime: docker
+    plan: starter
+    dockerfilePath: ./Dockerfile
+    healthCheckPath: /healthcheck
+    envVars:
+      - key: NAKAMA_DATABASE_USER
+        fromDatabase:
+          name: tic-tac-toe-db
+          property: user
+      - key: NAKAMA_DATABASE_PASSWORD
+        fromDatabase:
+          name: tic-tac-toe-db
+          property: password
+      - key: NAKAMA_DATABASE_HOST
+        fromDatabase:
+          name: tic-tac-toe-db
+          property: host
+      - key: NAKAMA_DATABASE_PORT
+        fromDatabase:
+          name: tic-tac-toe-db
+          property: port
+      - key: NAKAMA_DATABASE_NAME
+        fromDatabase:
+          name: tic-tac-toe-db
+          property: database
+      - key: NAKAMA_DATABASE_SSLMODE
+        value: require
+      - key: NAKAMA_LOGGER_LEVEL
+        value: INFO
+      - key: NAKAMA_SESSION_TOKEN_EXPIRY_SEC
+        value: "7200"
+      - key: NAKAMA_MATCH_MAX_EMPTY_SEC
+        value: "60"
+      - key: NAKAMA_SESSION_ENCRYPTION_KEY
+        generateValue: true
+      - key: NAKAMA_SERVER_KEY
+        generateValue: true
+      - key: NAKAMA_SOCKET_ALLOWED_ORIGINS
+        fromService:
+          type: web
+          name: tic-tac-toe-client
+          property: host
+
+  - type: web
+    name: tic-tac-toe-client
+    runtime: static
+    rootDir: client
+    buildCommand: npm ci && npm run build
+    staticPublishPath: dist
+    routes:
+      - type: rewrite
+        source: /*
+        destination: /index.html
+    envVars:
+      - key: VITE_NAKAMA_HOST
+        fromService:
+          type: web
+          name: tic-tac-toe-nakama
+          property: host
+      - key: VITE_NAKAMA_PORT
+        value: "443"
+      - key: VITE_NAKAMA_SSL
+        value: "true"
+      - key: VITE_NAKAMA_KEY
+        fromService:
+          type: web
+          name: tic-tac-toe-nakama
+          envVarKey: NAKAMA_SERVER_KEY

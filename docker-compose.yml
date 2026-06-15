@@ -1,45 +1,46 @@
-version: "3"
-
 services:
-  cockroachdb:
-    image: cockroachdb/cockroach:latest-v23.1
-    command: start-single-node --insecure --store=attrs=ssd,path=/var/lib/cockroach/
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: nakama
+      POSTGRES_PASSWORD: nakama_local_dev
+      POSTGRES_DB: nakama
     volumes:
-      - cockroach-data:/var/lib/cockroach
+      - postgres-data:/var/lib/postgresql/data
     ports:
-      - "26257:26257"
-      - "8080:8080"
+      - "5432:5432"
     healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:8080/health?ready=1"]
+      test: ["CMD-SHELL", "pg_isready -U nakama -d nakama"]
       interval: 5s
       timeout: 5s
       retries: 10
 
   nakama:
-    image: registry.heroiclabs.com/heroiclabs/nakama:3.21.1
+    build:
+      context: .
+      dockerfile: Dockerfile
     depends_on:
-      cockroachdb:
+      postgres:
         condition: service_healthy
     ports:
-      - "7349:7349"   # gRPC
-      - "7350:7350"   # HTTP API
-      - "7351:7351"   # Console
+      - "7349:7349"
+      - "7350:7350"
+      - "7351:7351"
     volumes:
+      # Hot-reload runtime module during local dev (optional; rebuild image if removed)
       - ./server/build:/nakama/data/modules
-      - nakama-data:/nakama/data
-    entrypoint:
-      - "/bin/sh"
-      - "-ecx"
-      - >
-        /nakama/nakama migrate up --database.address root@cockroachdb:26257 &&
-        exec /nakama/nakama
-        --name nakama
-        --database.address root@cockroachdb:26257
-        --logger.level DEBUG
-        --session.token_expiry_sec 7200
-        --match.max_empty_sec 60
+    environment:
+      NAKAMA_DATABASE_USER: nakama
+      NAKAMA_DATABASE_PASSWORD: nakama_local_dev
+      NAKAMA_DATABASE_HOST: postgres
+      NAKAMA_DATABASE_PORT: "5432"
+      NAKAMA_DATABASE_NAME: nakama
+      NAKAMA_DATABASE_SSLMODE: disable
+      NAKAMA_LOGGER_LEVEL: DEBUG
+      NAKAMA_SERVER_KEY: defaultkey
+      NAKAMA_SESSION_ENCRYPTION_KEY: local_dev_encryption_key_min_32_chars
+      NAKAMA_SOCKET_ALLOWED_ORIGINS: "http://localhost:5173,http://127.0.0.1:5173"
     restart: unless-stopped
 
 volumes:
-  cockroach-data:
-  nakama-data:
+  postgres-data:

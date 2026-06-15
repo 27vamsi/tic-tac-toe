@@ -25,7 +25,7 @@ A production-ready, real-time multiplayer Tic-Tac-Toe game with server-authorita
 
 ```
 ┌─────────────┐        WebSocket         ┌─────────────────┐        SQL         ┌──────────────┐
-│  React App  │ ◄─────────────────────► │   Nakama Server  │ ◄──────────────► │  CockroachDB │
+│  React App  │ ◄─────────────────────► │   Nakama Server  │ ◄──────────────► │  PostgreSQL  │
 │  (Vite)     │   Real-time match data   │   (Game Logic)   │   Leaderboard,   │              │
 │             │   RPC calls (HTTP)       │   TypeScript     │   Player Stats,  │              │
 │             │                          │   Runtime        │   Sessions       │              │
@@ -36,7 +36,7 @@ A production-ready, real-time multiplayer Tic-Tac-Toe game with server-authorita
 
 - **Server-authoritative**: All game logic runs in Nakama's TypeScript runtime (match handler). The client sends intents (move requests, rematch requests), and the server validates and broadcasts state. This prevents cheating.
 - **Nakama match system**: Uses Nakama's built-in authoritative match handler (`registerMatch`) for game lifecycle (init, join, leave, loop, terminate). The `matchLoop` runs at 5 ticks/second for idle/forfeit checks.
-- **CockroachDB**: Used as Nakama's backing store. Leaderboard records and player stats are persisted and survive server restarts.
+- **PostgreSQL**: Used as Nakama's backing store (local Docker Compose and Render managed Postgres). Leaderboard records and player stats are persisted and survive server restarts.
 - **Rematch via in-place reset**: Instead of creating a new match, rematch resets the existing match state. This avoids coordination complexity and keeps players in the same WebSocket connection.
 
 ### Server Modules
@@ -75,53 +75,61 @@ git clone <repo-url>
 cd tic-tac-toe
 ```
 
-### 2. Build the server module
+### 2. Configure environment (optional)
 
 ```bash
-cd server
-npm install
-npm run build
-cd ..
+cp .env.example .env
+cp client/.env.example client/.env
 ```
 
-This compiles the TypeScript game logic into `server/build/index.js`, which Nakama loads as a JavaScript runtime module.
+Defaults work for local Docker + Vite dev server.
 
-### 3. Start the backend
+### 3. Build the server module and start the backend
 
 ```bash
-docker-compose up -d
+npm run build:server
+npm run docker:up
+```
+
+Or manually:
+
+```bash
+cd server && npm install && npm run build && cd ..
+docker compose up -d --build
 ```
 
 This starts:
 | Service | Port | Description |
 |---------|------|-------------|
-| CockroachDB | 26257 | SQL database |
-| CockroachDB UI | 8080 | Database admin console |
-| Nakama HTTP API | 7350 | REST/RPC endpoint |
+| PostgreSQL | 5432 | SQL database |
+| Nakama HTTP API | 7350 | REST/RPC + WebSocket endpoint |
 | Nakama gRPC | 7349 | gRPC endpoint |
-| Nakama Console | 7351 | Server admin console |
+| Nakama Console | 7351 | Server admin console (local only) |
 
-Wait a few seconds for CockroachDB health check to pass and Nakama to run migrations.
+Wait for Postgres health check to pass; Nakama runs migrations automatically on start.
 
 ### 4. Start the frontend
 
 ```bash
-cd client
-npm install
-npm run dev
+npm run dev:client
 ```
 
 The app runs at `http://localhost:5173`.
 
 ## API / Server Configuration
 
-### Nakama Server Config (docker-compose.yml)
+### Nakama Server Config
 
-| Setting | Value | Description |
-|---------|-------|-------------|
-| `session.token_expiry_sec` | 7200 | Session tokens valid for 2 hours |
-| `match.max_empty_sec` | 60 | Empty matches auto-terminate after 60s |
-| `logger.level` | DEBUG | Full debug logging |
+Production and local settings are driven by environment variables (see `.env.example`, `docker-compose.yml`, and `docker/nakama-entrypoint.sh`).
+
+| Variable | Local default | Description |
+|----------|---------------|-------------|
+| `NAKAMA_LOGGER_LEVEL` | DEBUG | Log verbosity (`INFO` in production) |
+| `NAKAMA_SESSION_TOKEN_EXPIRY_SEC` | 7200 | Session tokens valid for 2 hours |
+| `NAKAMA_MATCH_MAX_EMPTY_SEC` | 60 | Empty matches auto-terminate after 60s |
+| `NAKAMA_SESSION_ENCRYPTION_KEY` | (required) | Encrypts session tokens — use a long random secret in prod |
+| `NAKAMA_SERVER_KEY` | defaultkey | Must match client `VITE_NAKAMA_KEY` |
+| `NAKAMA_SOCKET_ALLOWED_ORIGINS` | localhost:5173 | Comma-separated origins allowed for WebSocket/API |
 
 ### Client Environment Variables
 
@@ -155,48 +163,52 @@ Set these in `client/.env` or as environment variables:
 
 ## Deployment
 
-### Backend Deployment
+### Render (recommended)
 
-1. Provision a VM (e.g., AWS EC2, DigitalOcean Droplet, GCP Compute Engine) with Docker installed.
+This repo includes a [Render Blueprint](https://render.com/docs/blueprint-spec) (`render.yaml`) that provisions:
 
-2. Copy the project files to the server:
-   ```bash
-   scp -r server/ docker-compose.yml user@your-server:/app/
-   ```
+| Resource | Type | Purpose |
+|----------|------|---------|
+| `tic-tac-toe-db` | PostgreSQL | Nakama database |
+| `tic-tac-toe-nakama` | Docker Web Service | Nakama + game runtime module |
+| `tic-tac-toe-client` | Static Site | React production build |
 
-3. On the server, start the services:
-   ```bash
-   cd /app
-   docker-compose up -d
-   ```
+**Steps:**
 
-4. Ensure ports 7350 (API) and 7351 (console) are open in your firewall/security group.
+1. Push the repo to GitHub/GitLab.
+2. In [Render Dashboard](https://dashboard.render.com/) → **New** → **Blueprint** → connect the repo and apply `render.yaml`.
+3. Wait for all three resources to deploy. The static site rebuild picks up `VITE_NAKAMA_*` from the Nakama service URL automatically.
+4. Open the **tic-tac-toe-client** URL and play.
 
-5. For production, update `docker-compose.yml`:
-   - Set a custom `--session.encryption_key` for secure tokens
-   - Set `--logger.level` to `INFO`
-   - Configure HTTPS with a reverse proxy (Nginx/Caddy)
+**Important:**
 
-### Frontend Deployment
+- Nakama is on the **Starter** plan in `render.yaml` so WebSockets stay reliable (free web services spin down).
+- Render Postgres uses SSL; the entrypoint sets `NAKAMA_DATABASE_SSLMODE=require`.
+- `NAKAMA_SERVER_KEY` and `NAKAMA_SESSION_ENCRYPTION_KEY` are auto-generated on Render — the client receives the server key via blueprint linking.
+- If the Nakama health check fails, confirm the service **port** is **7350** (Docker `EXPOSE 7350`).
 
-1. Set environment variables pointing to your deployed Nakama server:
-   ```bash
-   VITE_NAKAMA_HOST=your-server-ip
-   VITE_NAKAMA_PORT=7350
-   VITE_NAKAMA_SSL=true  # if behind HTTPS
-   ```
+**Manual Render setup (without Blueprint):**
 
-2. Build the production bundle:
-   ```bash
-   cd client
-   npm run build
-   ```
+1. Create a **PostgreSQL** database; note user, password, host, port, database name.
+2. Create a **Web Service** from `Dockerfile`, plan **Starter**, health check `/healthcheck`, port **7350**, and set all `NAKAMA_*` variables from `.env.example` (use `sslmode=require` via `NAKAMA_DATABASE_SSLMODE`).
+3. Create a **Static Site** with root `client`, build `npm ci && npm run build`, publish `dist`, and set `VITE_NAKAMA_HOST` / `VITE_NAKAMA_KEY` to match the Nakama service.
 
-3. Deploy the `client/dist/` folder to any static hosting:
-   - **Vercel**: `npx vercel --prod`
-   - **Netlify**: drag-and-drop `dist/` or use CLI
-   - **Nginx**: serve `dist/` as static files
-   - **S3 + CloudFront**: upload to S3, configure CloudFront distribution
+### Other hosts
+
+**Backend (Docker):** Use `Dockerfile` + `docker/nakama-entrypoint.sh` with any host that runs containers (Fly.io, Railway, VM + Docker). Point Nakama at a managed PostgreSQL instance and set production env vars from `.env.example`.
+
+**Frontend (static):** Build with production Nakama env vars, then deploy `client/dist/`:
+
+```bash
+cd client
+VITE_NAKAMA_HOST=your-nakama-host \
+VITE_NAKAMA_PORT=443 \
+VITE_NAKAMA_SSL=true \
+VITE_NAKAMA_KEY=your-server-key \
+npm ci && npm run build
+```
+
+Hosts: Vercel, Netlify, Cloudflare Pages, S3 + CloudFront, or Render Static Site.
 
 ## Testing Multiplayer
 

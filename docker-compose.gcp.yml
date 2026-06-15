@@ -1,0 +1,61 @@
+# Full stack for a single GCE VM: Postgres + Nakama + the web client.
+# Run on the VM with the machine's external IP:
+#   HOST_IP=$(curl -s ifconfig.me) docker compose -f docker-compose.gcp.yml up -d --build
+#
+# Then open  http://<HOST_IP>  in a browser.
+services:
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: nakama
+      POSTGRES_PASSWORD: nakama_password
+      POSTGRES_DB: nakama
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U nakama -d nakama"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+    restart: unless-stopped
+
+  nakama:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    depends_on:
+      postgres:
+        condition: service_healthy
+    ports:
+      - "7350:7350"
+      - "7351:7351"
+    environment:
+      NAKAMA_DATABASE_USER: nakama
+      NAKAMA_DATABASE_PASSWORD: nakama_password
+      NAKAMA_DATABASE_HOST: postgres
+      NAKAMA_DATABASE_PORT: "5432"
+      NAKAMA_DATABASE_NAME: nakama
+      NAKAMA_DATABASE_SSLMODE: disable
+      NAKAMA_LOGGER_LEVEL: INFO
+      NAKAMA_SERVER_KEY: defaultkey
+      NAKAMA_SESSION_ENCRYPTION_KEY: change_me_to_a_random_32_char_string
+      NAKAMA_SOCKET_ALLOWED_ORIGINS: "http://${HOST_IP}"
+    restart: unless-stopped
+
+  client:
+    build:
+      context: .
+      dockerfile: Dockerfile.client
+      args:
+        VITE_NAKAMA_HOST: "${HOST_IP}"
+        VITE_NAKAMA_PORT: "7350"
+        VITE_NAKAMA_SSL: "false"
+        VITE_NAKAMA_KEY: "defaultkey"
+    depends_on:
+      - nakama
+    ports:
+      - "80:8080"
+    restart: unless-stopped
+
+volumes:
+  postgres-data:
